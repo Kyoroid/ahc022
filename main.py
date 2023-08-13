@@ -4,7 +4,7 @@ from typing import NamedTuple
 import math
 import logging
 
-logging.basicConfig(level="ERROR")
+logging.basicConfig(level="INFO")
 logger = logging.getLogger()
 
 
@@ -36,6 +36,29 @@ class FieldInitializer:
                 )
                 p[y][x] = round(v)
         return p
+
+
+class FeatureExtractor:
+
+    def __init__(self) -> None:
+        # カーネルサイズ
+        K = 13
+        half_K = 13 // 2
+        self.D = [(0, 0), (-half_K, 0), (-1, -half_K), (1, half_K), (0, half_K)]
+
+    def extract_feature(self, L: int, P: list[list[int]], y: int, x: int) -> tuple[int, ...]:
+        feature = []
+        for dy, dx in self.D:
+            ny = (y + dy) % L
+            nx = (x + dx) % L
+            v = P[ny][nx]
+            feature.append(v)
+        return tuple(feature)
+
+
+def mse_loss(pred: list[float], target: list[int]) -> float:
+    n = len(pred)
+    return sum([(pred[i] - target[i])**2 for i in range(n)]) / n
 
 
 def read0() -> tuple[int, int, int, list[ExitCell]]:
@@ -82,7 +105,13 @@ class Solver:
         self.L, self.N, self.S, self.exit_cells = read0()
         field = FieldInitializer(self.L)
         self.P = field.get_cosine_field()
-        self.wormholes_p = [0] * self.N
+        extractor = FeatureExtractor()
+        self.exit_cell_features = []
+        for exit_cell in self.exit_cells:
+            feature = extractor.extract_feature(self.L, self.P, exit_cell.y, exit_cell.x)
+            self.exit_cell_features.append(feature)
+            logger.info(feature)
+        self.wormhole_features = []
         write_cells(self.P)
 
     def measure(self, i: int, y: int, x: int) -> int:
@@ -91,37 +120,35 @@ class Solver:
 
     def measurement_step(self):
         # n_samples回サンプリング
-        n_samples = 100
+        n_samples = 100 // 20
+        # カーネルサイズ
+        K = 13
+        half_K = K // 2
+        extractor = FeatureExtractor()
         for i in range(self.N):
-            p_sampled = [self.measure(i, 0, 0) for j in range(n_samples)]
-            p_e = sum(p_sampled) / n_samples
-            p_ss = sum([(p - p_e) * (p - p_e) for p in p_sampled]) / n_samples
-            p_std = math.sqrt(p_ss)
-            self.wormholes_p[i] = round(p_e)
-            logger.info(f"{i}th sample has p_e={p_e:.03f}, p_std={p_std:.03f}")
+
+            p_e = [[0 for x in range(K)] for y in range(K)]
+            D = [(0, 0), (-half_K, 0), (-1, -half_K), (1, half_K), (0, half_K)]
+            for dy, dx in D:
+                p_e[dy+half_K][dx+half_K] = sum([self.measure(i, dy, dx) for j in range(n_samples)]) / n_samples
+            feature = extractor.extract_feature(K, p_e, half_K, half_K)
+            self.wormhole_features.append(feature)
 
     def answer(self, wormholes):
         write_answer(wormholes)
 
     def answer_step(self):
-        actual, expect = [], []
+        INF = 1e12
+        wormholes = [0] * self.N
         for i in range(self.N):
-            exit_cell = self.exit_cells[i]
-            p_gt = self.P[exit_cell.y][exit_cell.x]
-            actual.append((p_gt, i))
-        for i in range(self.N):
-            wormhole_p = self.wormholes_p[i]
-            expect.append((wormhole_p, i))
-        actual.sort()
-        expect.sort()
-        logger.info(actual)
-        logger.info(expect)
-        wormholes = [-1] * self.N
-        for k in range(self.N):
-            # i-th wormhole is j-th exitcell
-            i = expect[k][1]
-            j = actual[k][1]
-            wormholes[i] = j
+            min_loss = INF
+            min_j = 0
+            for j in range(self.N):
+                loss = mse_loss(self.wormhole_features[i], self.exit_cell_features[j])
+                if loss < min_loss:
+                    min_loss = loss
+                    min_j = j
+            wormholes[i] = min_j
         self.answer(wormholes)
 
     def run(self):
