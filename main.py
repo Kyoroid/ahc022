@@ -360,6 +360,7 @@ if __name__ == "__main__":
     best_score_e = -1
     best_score_std = 1e12
     # (Heatmap, Featurizer) の組み合わせを時間の限り試す
+    random.seed(42)
     for t in range(20):
         heatmap = Heatmap.const_init(L, y_offset=0, x_offset=0)
         featurizer = Featurizer.rand_init(window_size=11, feature_size=5, num_samples=10)
