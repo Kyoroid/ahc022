@@ -1,17 +1,16 @@
 from __future__ import annotations
 import sys
 from typing import NamedTuple
-from collections import defaultdict, Counter
-import itertools
-import pprint
 import random
 import math
 import logging
 import numpy as np
-from scipy.interpolate import LinearNDInterpolator
+import scipy.stats
 
 logging.basicConfig(level="INFO")
 logger = logging.getLogger()
+
+SEED0 = [79, 90, 11, 72, 16, 74, 69, 24, 58, 48, 23, 15, 70, 80, 57, 51, 22, 6, 50, 37, 45, 7, 12, 61, 29, 94, 89, 87, 5, 43, 81, 26, 8, 56, 10, 0, 31, 44, 9, 21, 68, 93, 36, 40, 62, 65, 91, 85, 86, 49, 13, 71, 27, 84, 25, 35, 47, 28, 42, 75, 17, 88, 67, 64, 78, 83, 46, 77, 32, 4, 60, 19, 53, 14, 18, 20, 54, 41, 2, 66, 34, 59, 76, 63, 55, 38, 52, 92, 39, 3, 1, 33, 30, 82, 73]
 
 
 class ExitCell(NamedTuple):
@@ -19,20 +18,36 @@ class ExitCell(NamedTuple):
     x: int
 
 
-class FieldInitializer:
-    def __init__(
-        self,
-        L: int,
-        N: int,
-        S: int,
-        exit_cells: list[ExitCell],
-        p_min: int = 0,
-        p_max: int = 1000,
-    ) -> None:
+class WaveGenerator:
+
+    def __init__(self, L: int) -> None:
+        # 周期カーネル
+        theta = np.array([1.0, L / (2 * np.pi)])
+        x = np.arange(0, L, dtype=np.int)
+        K = np.zeros((L, L))
+
+        for i in range(L):
+            for j in range(L):
+                K[i, j] = \
+                    np.exp(theta[0] * np.cos(np.abs(x[i]-x[j]) / theta[1]))
+
+        lmb, u_t = np.linalg.eig(K)
+        lmb, u_t = lmb.real, u_t.real
+        eps = 1e-12
+
+        A = np.dot(u_t, np.diag(np.sqrt(lmb + eps)))
         self.L = L
-        self.N = N
-        self.S = S
-        self.exit_cells = exit_cells
+        self.x = x
+        self.A = A
+
+    def get_wave(self, dtype=np.float) -> np.ndarray:
+        y = np.dot(self.A, scipy.stats.norm.rvs(loc=0, scale=1, size=self.L))
+        return y.astype(dtype)
+
+
+class FieldInitializer:
+    def __init__(self, L: int, p_min: int = 0, p_max: int = 1000) -> None:
+        self.L = L
         self.p_min = p_min
         self.p_max = p_max
 
@@ -40,11 +55,11 @@ class FieldInitializer:
         std = (v - v_min) / (v_max - v_min)
         return std * (self.p_max - self.p_min) + self.p_min
 
-    def get_const_field(self, const: int) -> list[list[int]]:
-        return [[const for y in range(self.L)] for x in range(self.L)]
+    def get_zero_field(self) -> list[list[int]]:
+        return [[0 for y in range(self.L)] for x in range(self.L)]
 
     def get_cosine_field(self, y_offset: int = 0, x_offset: int = 0) -> list[list[int]]:
-        p = self.get_const_field(0)
+        p = self.get_zero_field()
         period = 2 * math.pi / self.L
         yoff = math.pi * 2 * (y_offset / self.L)
         xoff = math.pi * 2 * (x_offset / self.L)
@@ -56,70 +71,42 @@ class FieldInitializer:
                 p[y][x] = round(v)
         return p
 
+    def get_random_cosine_field(self):
+        wgen = WaveGenerator(self.L)
+        wgen = WaveGenerator(self.L)
+        z1 = wgen.get_wave()
+        z2 = wgen.get_wave()
+        vmax = np.max(z1) + np.max(z2)
+        vmin = np.min(z1) + np.min(z2)
+        p = self.get_zero_field()
+        for y in range(self.L):
+            for x in range(self.L):
+                v = self._minmax_scale(
+                    z1[y] + z2[x], vmin, vmax
+                ).astype(np.int).item()
+                p[y][x] = v
+        return p
 
-class Featurizer:
-    def __init__(
-        self,
-        L: int,
-        N: int,
-        S: int,
-        exit_cells: list[ExitCell],
-        p_max: int,
-        code_radius: int,
-        code_length: int,
-        code_offset=None,
-        code=None,
-    ) -> None:
-        assert code_length >= 8
-        self.L = L
-        self.N = N
-        self.S = S
-        self.exit_cells = exit_cells
-        self.p_max = p_max
-        self.threshold = p_max / 2
-        self.code_radius = code_radius
-        self.code_length = code_length
-        self._offset_yx = code_offset
-        self._code = code
 
-    def init_code_offset(self) -> None:
-        """2Dコードを盤面に埋め込む際のデータ点の座標をランダムに決める"""
-        r = self.code_radius
-        rr = r * 2 + 1
-        assert self.code_length <= rr * rr, "半径が小さすぎてコードを埋め込めません"
-        indice = random.sample(range(rr * rr), k=self.code_length)
-        offset_yx = []
-        for idx in indice:
-            dy, dx = divmod(idx, rr)
-            offset_yx.append((dy - r, dx - r))
-        self._offset_yx = offset_yx
+class FeatureExtractor:
+    def __init__(self) -> None:
+        # カーネルサイズ
+        K = 13
+        half_K = K // 2
+        self.K = K
+        self.half_K = half_K
+        self.D = [(0, 0), (0, -half_K), (-half_K, 0), (0, half_K), (half_K, 0)]
 
-    @property
-    def code_offset(self) -> list[tuple[int, int]]:
-        return self._offset_yx
-
-    def init_code(self) -> None:
-        code_list = list(itertools.product([0, 1], repeat=self.code_length))
-        self._code = code_list[:self.N]
-
-    @property
-    def code(self):
-        return self._code
-
-    def list_points(self, cy: int, cx: int) -> list[tuple[int, int]]:
-        """気温の測定位置の絶対座標を取得する"""
-        return [
-            ((cy + dy) % self.L, (cx + dx) % self.L) for (dy, dx) in self._offset_yx
-        ]
-
-    def value2code(self, value: list[int]) -> list[int]:
-        """気温をコードに変換する"""
-        return [1 if v > self.threshold else 0 for v in value]
-
-    def value2str(self, value: list[int]) -> str:
-        """気温をコード文字列に変換する"""
-        code = self.value2code(value)
-        return "".join(map(str, code))
+    def extract_feature(
+        self, L: int, P: list[list[int]], y: int, x: int
+    ) -> tuple[int, ...]:
+        feature = []
+        for dy, dx in self.D:
+            ny = (y + dy) % L
+            nx = (x + dx) % L
+            v = P[ny][nx]
+            feature.append(v)
+        return tuple(feature)
 
 
 def mse_loss(pred: list[float], target: list[int]) -> float:
@@ -159,25 +146,19 @@ def write_answer(wormholes: list[int]):
 
 
 class SolverBase:
-    def __init__(self, L: int, N: int, S: int, exit_cells: list[ExitCell]) -> None:
+    def __init__(self, L: int, N: int, S: int, exit_cells: list[ExitCell], P=None) -> None:
         self.L = L
         self.N = N
         self.S = S
         self.exit_cells = exit_cells
-        self.P = None
-        self.p_min = 0
-        self.p_max = min(1000, round(self.S*4))
+        self.P = P
         self.wormholes_p: list[int] = None
-        self.exit_cell_features: list[list[int]] = []
-        self.wormhole_features: list[list[int]] = []
-        self.code_radius = 1
-        self.code_length = 8
-        self.featurizer: Featurizer = None
+        self.wormhole_features = []
+        self.exit_cell_features = []
+        self.placement_cost = 0
+        self.measurement_cost = 0
 
     def write_cells(self, P: list[list[int]]) -> None:
-        raise NotImplementedError
-
-    def read_parameters(self) -> tuple[int, int, int, list[ExitCell]]:
         raise NotImplementedError
 
     def measure(self, i: int, y: int, x: int) -> int:
@@ -187,94 +168,44 @@ class SolverBase:
         raise NotImplementedError
 
     def placement_step(self):
-        field = FieldInitializer(
-            self.L, self.N, self.S, self.exit_cells, p_max=self.p_max
-        )
-        max_code_quality = -1000000
-        best_featurizer = None
-        best_P = None
-        best_exit_cell_features = None
-        n_code_gen = 1000
-        for t in range(n_code_gen):
-            featurizer = Featurizer(
-                self.L,
-                self.N,
-                self.S,
-                self.exit_cells,
-                p_max=self.p_max,
-                code_radius=self.code_radius,
-                code_length=self.code_length,
+        if self.P is None:
+            field = FieldInitializer(self.L, p_min=0, p_max=1000)
+            P = field.get_cosine_field()
+            self.P = P
+        P = self.P
+        extractor = FeatureExtractor()
+        for exit_cell in self.exit_cells:
+            feature = extractor.extract_feature(
+                self.L, P, exit_cell.y, exit_cell.x
             )
-            P = field.get_const_field(round(featurizer.threshold))
-            featurizer.init_code_offset()
-            self.exit_cell_features = []
-            # コードを生成
-            featurizer.init_code()
-            code_list = featurizer.code
-            for i in range(self.N):
-                exit_cell = self.exit_cells[i]
-                code = code_list[i]
-                point_yx = featurizer.list_points(exit_cell.y, exit_cell.x)
-                for j in range(self.code_length):
-                    y, x = point_yx[j]
-                    P[y][x] = self.p_max if code[j] == 1 else self.p_min
-            # コードを読み取ってみる
-            code_quality = 0
-            exit_cell_features = []
-            for i in range(self.N):
-                exit_cell = self.exit_cells[i]
-                code_expect = code_list[i]
-                point_yx = featurizer.list_points(exit_cell.y, exit_cell.x)
-                value = [0] * self.code_length
-                for j in range(self.code_length):
-                    y, x = point_yx[j]
-                    value[j] = P[y][x]
-                code_actual = featurizer.value2code(value)
-                exit_cell_features.append(code_actual)
-                for j in range(self.code_length):
-                    if code_actual[j] != code_expect[j]:
-                        code_quality -= 1
-            if code_quality > max_code_quality:
-                max_code_quality = code_quality
-                best_featurizer = featurizer
-                best_exit_cell_features = exit_cell_features
-                best_P = P
-            logger.info(f"Featurizer {t}: code_quality={code_quality}")
-        YX = set()
-        for cy, cx in self.exit_cells:
-            for y, x in best_featurizer.list_points(cy, cx):
-                for i in range(3):
-                    for j in range(3):
-                        YX.add((y + self.L*i, x + self.L*j))
-        YX = list(YX)
-        Z = []
-        for y, x in YX:
-            Z.append(best_P[y%self.L][x%self.L])
-        
-        interp = LinearNDInterpolator(YX, Z)
-        P = field.get_const_field(round(best_featurizer.threshold))
-        for y in range(self.L):
-            for x in range(self.L):
-                z = interp(y+self.L, x+self.L).item()
-                P[y][x] = round(z)
-        self.featurizer = best_featurizer
-        self.exit_cell_features = best_exit_cell_features
-        self.P = P
-        self.write_cells(self.P)
+            self.exit_cell_features.append(feature)
+        self.write_cells(P)
+        placement_cost = 0
+        for i in range(self.L):
+            i1 = (i + 1) % self.L
+            for j in range(self.L):
+                j1 = (j + 1) % self.L
+                placement_cost += (P[i][j] - P[i][j1]) ** 2 + (P[i][j] - P[i1][j]) ** 2
+        self.placement_cost = placement_cost
 
     def measurement_step(self):
         # n_samples回サンプリング
         n_samples = 10
+        extractor = FeatureExtractor()
         # カーネルサイズ
+        K = extractor.K
+        half_K = extractor.half_K
+        measurement_cost = 0
         for i in range(self.N):
-            value = [0] * self.code_length
-            for j in range(self.code_length):
-                dy, dx = self.featurizer.code_offset[j]
-                value[j] = (
-                    sum([self.measure(i, dy, dx) for _ in range(n_samples)]) / n_samples
+            p_e = [[0 for x in range(K)] for y in range(K)]
+            for dy, dx in extractor.D:
+                p_e[dy + half_K][dx + half_K] = (
+                    sum([self.measure(i, dy, dx) for j in range(n_samples)]) / n_samples
                 )
-            code = self.featurizer.value2code(value)
-            self.wormhole_features.append(code)
+                measurement_cost += 100 * (10 + abs(dy) + abs(dx)) * n_samples
+            feature = extractor.extract_feature(K, p_e, half_K, half_K)
+            self.wormhole_features.append(feature)
+        self.measurement_cost = measurement_cost
 
     def answer_step(self):
         INF = 1e12
@@ -283,9 +214,7 @@ class SolverBase:
             min_loss = INF
             min_j = 0
             for j in range(self.N):
-                feature_pred = self.wormhole_features[i]
-                feature_expect = self.exit_cell_features[j]
-                loss = mse_loss(feature_pred, feature_expect)
+                loss = mse_loss(self.wormhole_features[i], self.exit_cell_features[j])
                 if loss < min_loss:
                     min_loss = loss
                     min_j = j
@@ -299,16 +228,37 @@ class SolverBase:
 
 
 class Simulator(SolverBase):
+
+    def __init__(self, L: int, N: int, S: int, exit_cells: list[ExitCell], P=None) -> None:
+        super().__init__(L, N, S, exit_cells, P)
+        # wormhole_id -> exit_cell_id
+        self.exit_cell_id = list(random.sample(range(self.N), k=self.N))
+        self._score = 0
+    
+    def write_cells(self, P: list[list[int]]) -> None:
+        pass
+
     def measure(self, i: int, y: int, x: int) -> int:
-        exit_cell = self.exit_cells[i]
+        j = self.exit_cell_id[i]
+        exit_cell = self.exit_cells[j]
         p = self.P[(exit_cell.y + y) % self.L][(exit_cell.x + x) % self.L]
         theta = random.gauss(0, self.S)
-        return max(0, min(1000, round(p) + theta))
-
+        prediction = max(0, min(1000, round(p) + theta))
+        return prediction
+    
+    def write_answer(self, wormholes: list[int]) -> None:
+        w = 0
+        for i in range(self.N):
+            if wormholes[i] != self.exit_cell_id[i]:
+                w += 1
+        score = 10 ** 14 * 0.8 ** w / (self.measurement_cost + self.placement_cost + 10**5)
+        self._score = math.ceil(score)
+    
+    @property
+    def score(self):
+        return self._score
 
 class Solver(SolverBase):
-    def read_parameters(self) -> tuple[int, int, int, list[ExitCell]]:
-        return read_parameters()
 
     def write_cells(self, P: list[list[int]]) -> None:
         write_cells(P)
@@ -323,4 +273,25 @@ class Solver(SolverBase):
 
 if __name__ == "__main__":
     L, N, S, exit_cells = read_parameters()
-    Solver(L, N, S, exit_cells).run()
+    best_sim = None
+    best_score = -1
+    for i in range(10):
+        scores = []
+        for j in range(5):
+            simulator = Simulator(L, N, S, exit_cells)
+            simulator.run()
+            score = simulator.score
+            scores.append(score)
+        avg_score = sum(scores) / 100
+    if avg_score > best_score:
+        best_score = avg_score
+        best_sim = simulator
+    best_sim = simulator
+
+    logger.info(f"simulated placement cost = {best_sim.placement_cost}")
+    logger.info(f"simulated measurement cost = {best_sim.measurement_cost}")
+    logger.info(f"simulated score = {best_sim.score}")
+    solver = Solver(L, N, S, exit_cells, P=best_sim.P)
+    solver.run()
+    logger.info(f"predicted placement cost = {solver.placement_cost}")
+    logger.info(f"predicted measurement cost = {solver.measurement_cost}")
