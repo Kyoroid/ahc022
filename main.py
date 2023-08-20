@@ -443,6 +443,9 @@ def main(feature_sizes: List[int], time_threshold: float=3.5, seed: int = 0):
             )
         prev_max_p = -1
         for factor in range(1, (N.bit_length()+1)):
+            end = time.time()
+            if end - start > time_threshold:
+                break
             max_p = min(1000, S * factor)
             if prev_max_p == max_p:
                 continue
@@ -450,6 +453,10 @@ def main(feature_sizes: List[int], time_threshold: float=3.5, seed: int = 0):
             repeat_measurement = repeat_measurement_dict[factor]
             heatmap_builder = HeatmapBuilder(L, N, S, exit_cells, max_p = max_p, feature_initializer=feature_initializer)
             feature_offset, heatmap, heatmap_encoder = heatmap_builder.build_optimized_heatmap(loop=10)
+            # 測定回数上限を超える特徴は使わない
+            measurement_count = feature_offset.get_measurement_count(N, repeat_measurement=repeat_measurement)
+            if measurement_count > 10000:
+                continue
             simulator = Simulator(L, N, S, exit_cells, feature_offset, heatmap, heatmap_encoder, repeat_measurement=repeat_measurement)
             solution_info = simulator.simulate(loop=10)
             if solution_info.score_avg > best_score:
@@ -459,9 +466,6 @@ def main(feature_sizes: List[int], time_threshold: float=3.5, seed: int = 0):
                 best_heatmap = heatmap
                 best_heatmap_encoder = heatmap_encoder
                 best_repeat_measurement = repeat_measurement
-            end = time.time()
-            if end - start > time_threshold:
-                break
     logger.info(f"Best Simulator Result")
     logger.info(f"\tScore: {best_solution_info.score_avg} ± {best_solution_info.score_std}")
     logger.info(f"\tNumber of wrong answers: {best_solution_info.num_wrong_answers_avg} ± {best_solution_info.num_wrong_answers_std}")
@@ -477,7 +481,7 @@ def main(feature_sizes: List[int], time_threshold: float=3.5, seed: int = 0):
 def parse_arguments():
     parser = argparse.ArgumentParser()
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--feature_sizes", type=int, nargs="+", default=[2, 3, 4, 5, 7, 9])
+    parser.add_argument("--feature_sizes", type=int, nargs="+", default=[1, 2, 3, 4, 5, 7, 9, 11, 13, 15])
     parser.add_argument("--time_threshold", type=float, default=3.5)
     return parser.parse_args()
 
