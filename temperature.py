@@ -6,14 +6,14 @@ import matplotlib.pyplot as plt
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("i", type=int)
-    parser.add_argument("factor", type=int)
+    parser.add_argument("factor", type=float)
     return parser.parse_args()
 
-def main(i: int, factor: int):
+def main(i: int, factor: float):
     max_trial = 10
     max_samples = 100
     s = i * i
-    max_p = min(1000, s * factor)
+    max_p = min(1000, round(s * factor))
     for t in range(max_trial):
         x = np.arange(max_samples)
         p_min = np.random.normal(0, s, size=(max_samples, ))
