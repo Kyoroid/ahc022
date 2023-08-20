@@ -216,7 +216,13 @@ class HeatmapBuilder:
                 min_code_dict = code_dict
                 min_feature_offset = feature_offset
                 min_heatmap_encoder = heatmap_encoder
-
+        points = set()
+        for i in range(self.N):
+            coord_yx = min_feature_offset.get_coord_yx(self.L, self.exit_cells[i])
+            for j in range(min_feature_offset.feature_size):
+                y, x = coord_yx[j]
+                z = min_feature[i][j]
+                points.add((y, x, z))
         fill_value = (self.max_p + self.min_p) // 2
         P = [[fill_value for x in range(self.L)] for y in range(self.L)]
         for i in range(self.N):
@@ -231,7 +237,7 @@ class HeatmapBuilder:
 
 class SolverBase(ABC):
 
-    def __init__(self, L: int, N: int, S: int, exit_cells: List[ExitCell], feature_offset: FeatureOffset, heatmap: Heatmap, heatmap_encoder: HeatmapEncoder, repeat_measurement: int = 10) -> None:
+    def __init__(self, L: int, N: int, S: int, exit_cells: List[ExitCell], feature_offset: FeatureOffset, heatmap: Heatmap, heatmap_encoder: HeatmapEncoder, repeat_measurement: int) -> None:
         self.L = L
         self.N = N
         self.S = S
@@ -330,7 +336,7 @@ class AvgSolutionInfo(NamedTuple):
 
 class Simulator(SolverBase):
 
-    def __init__(self, L: int, N: int, S: int, exit_cells: List[ExitCell], feature_offset: FeatureOffset, heatmap: Heatmap, heatmap_encoder: HeatmapEncoder, repeat_measurement: int = 10) -> None:
+    def __init__(self, L: int, N: int, S: int, exit_cells: List[ExitCell], feature_offset: FeatureOffset, heatmap: Heatmap, heatmap_encoder: HeatmapEncoder, repeat_measurement: int) -> None:
         super().__init__(L, N, S, exit_cells, feature_offset, heatmap, heatmap_encoder, repeat_measurement)
         self.out_idx_gt = None
         """i番目のワームホールがout_idx_gt[i]番目の出口セルに繋がっている"""
@@ -424,20 +430,26 @@ class Solver(SolverBase):
 def main(feature_sizes: List[int], time_threshold: float=3.5, seed: int = 0):
     random.seed(seed)
     start = time.time()
-    REPEAT_MEASUREMENT = 10
     L, N, S, exit_cells = read_parameters()
     best_feature_offset, best_heatmap, best_heatmap_encoder = None, None, None
     best_solution_info = None
+    best_repeat_measurement = 10
     best_score = -1
+    repeat_measurement_dict = [10, 9, 4, 3, 2, 2, 2, 2, 2, 2]
     for feature_size in feature_sizes:
         feature_initializer = FeatureOffsetInitializer(
                 L, N, S, exit_cells, feature_size=feature_size, feature_radius=(feature_size + 1 // 2)
             )
-        for factor in range(1, N.bit_length()+1):
+        prev_max_p = -1
+        for factor in range(1, (N.bit_length()+1)):
             max_p = min(1000, S * factor)
+            if prev_max_p == max_p:
+                continue
+            prev_max_p = max_p
+            repeat_measurement = repeat_measurement_dict[factor]
             heatmap_builder = HeatmapBuilder(L, N, S, exit_cells, max_p = max_p, feature_initializer=feature_initializer)
             feature_offset, heatmap, heatmap_encoder = heatmap_builder.build_optimized_heatmap(loop=10)
-            simulator = Simulator(L, N, S, exit_cells, feature_offset, heatmap, heatmap_encoder, repeat_measurement=REPEAT_MEASUREMENT)
+            simulator = Simulator(L, N, S, exit_cells, feature_offset, heatmap, heatmap_encoder, repeat_measurement=repeat_measurement)
             solution_info = simulator.simulate(loop=10)
             if solution_info.score_avg > best_score:
                 best_score = solution_info.score_avg
@@ -445,6 +457,7 @@ def main(feature_sizes: List[int], time_threshold: float=3.5, seed: int = 0):
                 best_feature_offset = feature_offset
                 best_heatmap = heatmap
                 best_heatmap_encoder = heatmap_encoder
+                best_repeat_measurement = repeat_measurement
             end = time.time()
             if end - start > time_threshold:
                 break
@@ -456,7 +469,7 @@ def main(feature_sizes: List[int], time_threshold: float=3.5, seed: int = 0):
     logger.info(f"\tPlacement cost: {best_solution_info.placement_cost}")
     logger.info(f"\tMeasurement cost: {best_solution_info.measurement_cost}")
     logger.info(f"\tMeasurement count: {best_solution_info.measurement_count}")
-    solver = Solver(L, N, S, exit_cells, best_feature_offset, best_heatmap, best_heatmap_encoder, repeat_measurement=REPEAT_MEASUREMENT)
+    solver = Solver(L, N, S, exit_cells, best_feature_offset, best_heatmap, best_heatmap_encoder, repeat_measurement=best_repeat_measurement)
     solver.run()
 
 
