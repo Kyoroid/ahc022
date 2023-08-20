@@ -9,7 +9,7 @@ import logging
 import time
 from collections import Counter
 
-logging.basicConfig(level="INFO")
+logging.basicConfig(level="ERROR")
 logger = logging.getLogger()
 
 SEED0_GT = [79, 90, 11, 72, 16, 74, 69, 24, 58, 48, 23, 15, 70, 80, 57, 51, 22, 6, 50, 37, 45, 7, 12, 61, 29, 94, 89, 87, 5, 43, 81, 26, 8, 56, 10, 0, 31, 44, 9, 21, 68, 93, 36, 40, 62, 65, 91, 85, 86, 49, 13, 71, 27, 84, 25, 35, 47, 28, 42, 75, 17, 88, 67, 64, 78, 83, 46, 77, 32, 4, 60, 19, 53, 14, 18, 20, 54, 41, 2, 66, 34, 59, 76, 63, 55, 38, 52, 92, 39, 3, 1, 33, 30, 82, 73]
@@ -166,7 +166,7 @@ class FeatureOffsetInitializer:
 
 
 class HeatmapBuilder:
-    """温度をいい感じに決める"""
+    """温度を良い感じに決める"""
 
     def __init__(self, L: int, N: int, S: int, exit_cells: List[ExitCell], feature_initializer: FeatureOffsetInitializer, min_p: int = 0, max_p: int = 1000) -> None:
         self.L = L
@@ -234,6 +234,31 @@ class HeatmapBuilder:
         heatmap = Heatmap(P, self.min_p, self.max_p)
         return min_feature_offset, heatmap, min_heatmap_encoder
 
+
+class HeatmapOptimizer:
+    """温度を良い感じに調整する"""
+
+    def __init__(self, L: int, N: int, S: int, exit_cells: List[ExitCell]) -> None:
+        self.L = L
+        self.N = N
+        self.S = S
+        self.exit_cells = exit_cells
+    
+    def optimize(self, feature_offset: FeatureOffset, heatmap: Heatmap, loop: int=100000) -> None:
+        points = set()
+        for i in range(self.N):
+            for y, x in feature_offset.get_coord_yx(self.L, self.exit_cells[i]):
+                points.add((y, x))
+        for t in range(loop):
+            y = random.randint(0, self.L-1)
+            x = random.randint(0, self.L-1)
+            if (y, x) in points:
+                continue
+            z = 0
+            for dy, dx in [(-1, 0), (1, 0), (0, 1), (0, -1)]:
+                ny, nx = (y + dy) % self.L, (x + dx) % self.L
+                z += heatmap.P[ny][nx]
+            heatmap.P[y][x] = z // 4
 
 
 class SolverBase(ABC):
@@ -466,6 +491,8 @@ def main(feature_sizes: List[int], time_threshold: float=3.5, seed: int = 0):
                 best_heatmap = heatmap
                 best_heatmap_encoder = heatmap_encoder
                 best_repeat_measurement = repeat_measurement
+    heatmap_optimizer = HeatmapOptimizer(L, N, S, exit_cells)
+    heatmap_optimizer.optimize(best_feature_offset, best_heatmap)
     logger.info(f"Best Simulator Result")
     logger.info(f"\tScore: {best_solution_info.score_avg} ± {best_solution_info.score_std}")
     logger.info(f"\tNumber of wrong answers: {best_solution_info.num_wrong_answers_avg} ± {best_solution_info.num_wrong_answers_std}")
@@ -482,7 +509,7 @@ def parse_arguments():
     parser = argparse.ArgumentParser()
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--feature_sizes", type=int, nargs="+", default=[1, 2, 3, 4, 5, 7, 9, 11, 13, 15])
-    parser.add_argument("--time_threshold", type=float, default=3.5)
+    parser.add_argument("--time_threshold", type=float, default=3.7)
     return parser.parse_args()
 
 
