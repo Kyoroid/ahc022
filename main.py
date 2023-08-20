@@ -153,9 +153,10 @@ class FeatureOffsetInitializer:
         points = []
         for dy in range(-feature_radius, feature_radius+1):
             for dx in range(-feature_radius, feature_radius+1):
-                euclid_distance = abs(dy) + abs(dx)
-                if euclid_distance <= feature_radius:
-                    points.append((dy, dx))
+                #euclid_distance = abs(dy) + abs(dx)
+                #if euclid_distance <= feature_radius:
+                #    points.append((dy, dx))
+                points.append((dy, dx))
         self._points = points
 
     def random_feature_offset(self) -> FeatureOffset:
@@ -438,7 +439,7 @@ def main(feature_sizes: List[int], time_threshold: float=3.5, seed: int = 0):
     repeat_measurement_dict = [10, 9, 4, 3, 2, 2, 2, 2, 2, 2]
     for feature_size in feature_sizes:
         feature_initializer = FeatureOffsetInitializer(
-                L, N, S, exit_cells, feature_size=feature_size, feature_radius=(feature_size + 1 // 2)
+                L, N, S, exit_cells, feature_size=feature_size, feature_radius=(feature_size + 1) // 2
             )
         prev_max_p = -1
         for factor in range(1, (N.bit_length()+1)):
