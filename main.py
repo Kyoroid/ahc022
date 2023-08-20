@@ -421,7 +421,7 @@ class Solver(SolverBase):
         write_answer(out_idx)
 
 
-def main(feature_size: int, feature_radius: int, time_threshold: float=3.5, seed: int = 0):
+def main(feature_sizes: List[int], time_threshold: float=3.5, seed: int = 0):
     random.seed(seed)
     start = time.time()
     REPEAT_MEASUREMENT = 10
@@ -429,23 +429,25 @@ def main(feature_size: int, feature_radius: int, time_threshold: float=3.5, seed
     best_feature_offset, best_heatmap, best_heatmap_encoder = None, None, None
     best_solution_info = None
     best_score = -1
-    feature_initializer = FeatureOffsetInitializer(
-        L, N, S, exit_cells, feature_size=feature_size, feature_radius=feature_radius
-    )
-    for max_p in [1000, 800, 600, 400, 300, 200, 150, 120, 100, 80, 60, 50, 40, 30, 20, 10, 5, 3]:
-        heatmap_builder = HeatmapBuilder(L, N, S, exit_cells, max_p = max_p, feature_initializer=feature_initializer)
-        feature_offset, heatmap, heatmap_encoder = heatmap_builder.build_optimized_heatmap(loop=5)
-        simulator = Simulator(L, N, S, exit_cells, feature_offset, heatmap, heatmap_encoder, repeat_measurement=REPEAT_MEASUREMENT)
-        solution_info = simulator.simulate(loop=10)
-        if solution_info.score_avg > best_score:
-            best_score = solution_info.score_avg
-            best_solution_info = solution_info
-            best_feature_offset = feature_offset
-            best_heatmap = heatmap
-            best_heatmap_encoder = heatmap_encoder
-        end = time.time()
-        if end - start > time_threshold:
-            break
+    for feature_size in feature_sizes:
+        feature_initializer = FeatureOffsetInitializer(
+                L, N, S, exit_cells, feature_size=feature_size, feature_radius=(feature_size + 1 // 2)
+            )
+        for factor in range(1, N.bit_length()+1):
+            max_p = min(1000, S * factor)
+            heatmap_builder = HeatmapBuilder(L, N, S, exit_cells, max_p = max_p, feature_initializer=feature_initializer)
+            feature_offset, heatmap, heatmap_encoder = heatmap_builder.build_optimized_heatmap(loop=10)
+            simulator = Simulator(L, N, S, exit_cells, feature_offset, heatmap, heatmap_encoder, repeat_measurement=REPEAT_MEASUREMENT)
+            solution_info = simulator.simulate(loop=10)
+            if solution_info.score_avg > best_score:
+                best_score = solution_info.score_avg
+                best_solution_info = solution_info
+                best_feature_offset = feature_offset
+                best_heatmap = heatmap
+                best_heatmap_encoder = heatmap_encoder
+            end = time.time()
+            if end - start > time_threshold:
+                break
     logger.info(f"Best Simulator Result")
     logger.info(f"\tScore: {best_solution_info.score_avg} ± {best_solution_info.score_std}")
     logger.info(f"\tNumber of wrong answers: {best_solution_info.num_wrong_answers_avg} ± {best_solution_info.num_wrong_answers_std}")
@@ -461,8 +463,7 @@ def main(feature_size: int, feature_radius: int, time_threshold: float=3.5, seed
 def parse_arguments():
     parser = argparse.ArgumentParser()
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--feature_size", type=int, default=7)
-    parser.add_argument("--feature_radius", type=int, default=5)
+    parser.add_argument("--feature_sizes", type=int, nargs="+", default=[2, 3, 4, 5, 7, 9])
     parser.add_argument("--time_threshold", type=float, default=3.5)
     return parser.parse_args()
 
